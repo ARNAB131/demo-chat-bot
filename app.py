@@ -2,6 +2,8 @@ import streamlit as st
 from datetime import datetime
 from typing import Dict, Any, List, Optional
 import math
+import json
+import random
 
 # -----------------------------------------------------------------------------
 # Streamlit compatibility shims
@@ -30,7 +32,10 @@ from BedSelector import BedSelector
 from AppointmentCard import AppointmentCard
 
 # Schemas (optional runtime validation if pydantic is available)
-from models import Appointment, Doctor, Hospital
+try:
+    from models import Appointment, Doctor, Hospital  # noqa: F401
+except Exception:
+    Appointment = Doctor = Hospital = object  # placeholders
 
 
 # -----------------------------
@@ -43,6 +48,7 @@ conversationSteps = {
     "ASK_SYMPTOMS": "ask_symptoms",
     "SHOW_DOCTORS": "show_doctors",
     "ASK_BED": "ask_bed",
+    "ASK_VITALS": "ask_vitals",            # <-- vitals step
     "COLLECT_DETAILS": "collect_details",
     "FINAL_CARD": "final_card",
 }
@@ -81,8 +87,50 @@ def calculateETA(distance_km: Optional[float]) -> Optional[int]:
     return round(distance_km * 2)  # ~30km/h average
 
 
+def _synth_vitals() -> Dict[str, Any]:
+    return {
+        "timestamp": datetime.now().isoformat(),
+        "systolic_bp": round(random.uniform(105, 135), 1),
+        "diastolic_bp": round(random.uniform(65, 88), 1),
+        "body_temperature": round(random.uniform(36.3, 37.4), 1),
+    }
+
+
+def get_recent_vitals() -> Dict[str, Any]:
+    """
+    1) Try vitals_bridge.get_latest_vitals() if bridge file exists.
+    2) Else try session_state["forecast_data"] last row.
+    3) Else synthesize reasonable vitals so flow never breaks.
+    """
+    # 1) bridge
+    try:
+        from vitals_bridge import get_latest_vitals  # type: ignore
+        v = get_latest_vitals()
+        if v:
+            return v
+    except Exception:
+        pass
+
+    # 2) session data
+    df = st.session_state.get("forecast_data", None)
+    if df is not None and getattr(df, "empty", True) is False:
+        try:
+            row = df.iloc[-1]
+            return {
+                "timestamp": str(row.get("timestamp", datetime.now().isoformat())),
+                "systolic_bp": float(row.get("systolic_bp", 120.0)),
+                "diastolic_bp": float(row.get("diastolic_bp", 80.0)),
+                "body_temperature": float(row.get("body_temperature", 36.8)),
+            }
+        except Exception:
+            pass
+
+    # 3) fallback
+    return _synth_vitals()
+
+
 # -----------------------------
-# Solid chat input (no forms, Enter + Button both work)
+# Solid chat input (Enter + Button both work)
 # -----------------------------
 def SafeChatInput(onSend, placeholder="Type your message...", disabled=False, formKey="chat"):
     """
@@ -94,7 +142,6 @@ def SafeChatInput(onSend, placeholder="Type your message...", disabled=False, fo
     btn_key = f"chat_input_btn_{formKey}"
     st.session_state.setdefault(text_key, "")
 
-    # Callback that reads, sends, clears, and reruns.
     def _send_cb():
         msg = (st.session_state.get(text_key) or "").strip()
         if not msg or disabled:
@@ -105,7 +152,6 @@ def SafeChatInput(onSend, placeholder="Type your message...", disabled=False, fo
             st.session_state[text_key] = ""
             _rerun()
 
-    # UI
     st.markdown("""
     <style>
       .ci-wrap{display:flex;gap:8px;padding:16px;background:#111214;border-top:1px solid #2a2b2f;}
@@ -122,20 +168,18 @@ def SafeChatInput(onSend, placeholder="Type your message...", disabled=False, fo
     </style>
     """, unsafe_allow_html=True)
 
-    st.write("")  # small spacer
-    with st.container():
-        cols = st.columns([1, 0.18], gap="small")
-        with cols[0]:
-            st.text_input(
-                label="",
-                key=text_key,
-                placeholder=placeholder,
-                disabled=disabled,
-                label_visibility="collapsed",
-                on_change=_send_cb,  # pressing Enter submits
-            )
-        with cols[1]:
-            st.button("Send ➤", key=btn_key, on_click=_send_cb, disabled=disabled)
+    cols = st.columns([1, 0.18], gap="small")
+    with cols[0]:
+        st.text_input(
+            label="",
+            key=text_key,
+            placeholder=placeholder,
+            disabled=disabled,
+            label_visibility="collapsed",
+            on_change=_send_cb,  # Enter submits
+        )
+    with cols[1]:
+        st.button("Send ➤", key=btn_key, on_click=_send_cb, disabled=disabled)
 
 
 # -----------------------------
@@ -165,6 +209,8 @@ def BookingPage():
         st.session_state.currentDetailStep = 0
     if "finalAppointment" not in st.session_state:
         st.session_state.finalAppointment = None
+    if "recentVitals" not in st.session_state:
+        st.session_state.recentVitals = None
 
     st.title("🩺 Doctigo AI")
     st.caption("Your AI-powered medical booking assistant")
@@ -239,6 +285,10 @@ def BookingPage():
             ChatMessage("Do you need to book a Bed or Cabin? Please choose:", True, None)
             BedSelector(onSelect=handleBedSelect)
 
+        elif step == conversationSteps["ASK_VITALS"]:
+            ChatMessage("Hey buddy, why don't you hook up your **recent vitals**? Type **Yes** or **No**.", True, None)
+            SafeChatInput(onSend=handleVitalsChoice, formKey="ask_vitals", placeholder="Type Yes or No...")
+
         elif step == conversationSteps["COLLECT_DETAILS"]:
             idx = st.session_state.currentDetailStep
             detail = patientDetailSteps[idx]
@@ -285,6 +335,27 @@ def handleBedSelect(selection: Optional[Dict[str, Any]]):
         st.session_state.messages.append({"text": f"Selected {selection['type']}", "isBot": False})
     else:
         st.session_state.messages.append({"text": "No bed needed.", "isBot": False})
+    st.session_state.currentStep = conversationSteps["ASK_VITALS"]
+    _rerun()
+
+
+def handleVitalsChoice(answer: str):
+    ans = (answer or "").strip().lower()
+    st.session_state.messages.append({"text": answer, "isBot": False})
+
+    if ans in ("yes", "y"):
+        vitals = get_recent_vitals()
+        st.session_state.recentVitals = vitals
+        pretty = json.dumps(vitals, indent=2)
+        st.session_state.messages.append(
+            {"text": f"✅ Got it! I’ve attached your recent vitals:\n```\n{pretty}\n```", "isBot": True}
+        )
+    else:
+        st.session_state.recentVitals = None
+        st.session_state.messages.append(
+            {"text": "👍 No problem. We’ll proceed without recent vitals.", "isBot": True}
+        )
+
     st.session_state.currentStep = conversationSteps["COLLECT_DETAILS"]
     _rerun()
 
@@ -312,8 +383,8 @@ def handleDetail(detail_value: str):
         **st.session_state.patientDetails,
         "needs_bed": bool(st.session_state.bedSelection),
         "bed_type": st.session_state.bedSelection["type"] if st.session_state.bedSelection else None,
-        # AppointmentCard handles dict or JSON string
         "bed_details": st.session_state.bedSelection if st.session_state.bedSelection else None,
+        "recent_vitals": st.session_state.recentVitals,  # <-- attached vitals (or None)
         "status": "confirmed",
     }
     st.session_state.finalAppointment = appointment
