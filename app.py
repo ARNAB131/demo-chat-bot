@@ -6,9 +6,8 @@ import math
 # -----------------------------------------------------------------------------
 # Streamlit compatibility shims
 # -----------------------------------------------------------------------------
-# Some components may call st.experimental_rerun(); alias it to st.rerun when needed.
 if not hasattr(st, "experimental_rerun") and hasattr(st, "rerun"):
-    st.experimental_rerun = st.rerun  # alias for backward compatibility
+    st.experimental_rerun = st.rerun  # alias for older code that calls experimental_rerun
 
 
 def _rerun():
@@ -22,7 +21,7 @@ def _rerun():
 
 
 # -----------------------------------------------------------------------------
-# Import UI components (we'll not use ChatInput.py to avoid the crash)
+# Import UI components (we avoid ChatInput.py to prevent state errors)
 # -----------------------------------------------------------------------------
 from ChatMessage import ChatMessage
 from SymptomSelector import SymptomSelector
@@ -83,56 +82,60 @@ def calculateETA(distance_km: Optional[float]) -> Optional[int]:
 
 
 # -----------------------------
-# Safe inline ChatInput replacement
+# Solid chat input (no forms, Enter + Button both work)
 # -----------------------------
 def SafeChatInput(onSend, placeholder="Type your message...", disabled=False, formKey="chat"):
     """
-    A crash-free chat input:
-      - Unique keys per step via formKey
-      - No direct widget-state mutation after creation
-      - Clears AFTER sending and triggers rerun
+    - Uses a plain text_input with on_change callback.
+    - The same callback is also used by the Send button.
+    - Unique keys per step via formKey.
     """
     text_key = f"chat_input_text_{formKey}"
+    btn_key = f"chat_input_btn_{formKey}"
     st.session_state.setdefault(text_key, "")
 
-    # Simple styles (optional)
+    # Callback that reads, sends, clears, and reruns.
+    def _send_cb():
+        msg = (st.session_state.get(text_key) or "").strip()
+        if not msg or disabled:
+            return
+        try:
+            onSend(msg)
+        finally:
+            st.session_state[text_key] = ""
+            _rerun()
+
+    # UI
     st.markdown("""
     <style>
-      .ci-wrap{display:flex;gap:8px;padding:16px;background:#fff;border-top:1px solid #e5e7eb;}
+      .ci-wrap{display:flex;gap:8px;padding:16px;background:#111214;border-top:1px solid #2a2b2f;}
       .ci-input{position:relative;flex:1;}
       .ci-send{
-        padding:8px 16px;border-radius:8px;border:0;background:#3b82f6;color:#fff;cursor:pointer;
+        padding:10px 16px;border-radius:10px;border:1px solid #2a2b2f;background:#1f6feb;color:#fff;cursor:pointer;
       }
       .ci-send:disabled{opacity:.5;cursor:not-allowed}
       .ci-input input{
-        width:100%;padding:10px 12px;border-radius:8px;border:1px solid #e5e7eb;background:#f9fafb;
+        width:100%;padding:12px 14px;border-radius:10px;border:1px solid #2a2b2f;background:#0d1117;color:#e6edf3;
         outline:none;
       }
-      .ci-input input:focus{border-color:#3b82f6;box-shadow:0 0 0 3px rgba(59,130,246,.2)}
+      .ci-input input:focus{border-color:#1f6feb;box-shadow:0 0 0 3px rgba(31,111,235,.25)}
     </style>
     """, unsafe_allow_html=True)
 
-    with st.form(key=f"chat_input_form_{formKey}", clear_on_submit=False):
-        cols = st.columns([1, 0.22])
+    st.write("")  # small spacer
+    with st.container():
+        cols = st.columns([1, 0.18], gap="small")
         with cols[0]:
-            msg = st.text_input(
+            st.text_input(
                 label="",
                 key=text_key,
                 placeholder=placeholder,
                 disabled=disabled,
                 label_visibility="collapsed",
+                on_change=_send_cb,  # pressing Enter submits
             )
         with cols[1]:
-            send_clicked = st.form_submit_button("Send ➤", disabled=disabled or not (msg or "").strip())
-
-    if send_clicked and not disabled:
-        message = (st.session_state[text_key] or "").strip()
-        if message:
-            try:
-                onSend(message)
-            finally:
-                st.session_state[text_key] = ""
-                _rerun()
+            st.button("Send ➤", key=btn_key, on_click=_send_cb, disabled=disabled)
 
 
 # -----------------------------
@@ -164,7 +167,7 @@ def BookingPage():
         st.session_state.finalAppointment = None
 
     st.title("🩺 Doctigo AI")
-    st.caption("Doctigo AI-powered medical booking assistant")
+    st.caption("Your AI-powered medical booking assistant")
 
     step = st.session_state.currentStep
 
@@ -206,7 +209,7 @@ def BookingPage():
 
         elif step == conversationSteps["SHOW_DOCTORS"]:
             ChatMessage("Based on your information, here are available doctors:", True, None)
-            # NOTE: replace this with actual Doctor.list() + Hospital.list() once wired
+            # Replace with real Doctor/Hospital data when you wire it
             dummy_doctors = [
                 {
                     "name": "Amit Kumar",
