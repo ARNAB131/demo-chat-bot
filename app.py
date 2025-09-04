@@ -440,7 +440,7 @@ def BookingPage():
         st.session_state.inventory = inv
 
     st.title("🩺 Doctigo AI")
-    st.caption("Your AI-powered medical booking assistant")
+    st.caption("Doctigo AI-powered medical booking assistant")
 
     step = st.session_state.currentStep
 
@@ -469,7 +469,7 @@ def BookingPage():
 
         # ASK NAME
         if step == conversationSteps["ASK_NAME"]:
-            ChatMessage("Hello! I am Doc, your friendly neighborhood **Spider Doc** 🕷️🩺. What's your name?", True, None)
+            ChatMessage("Hello! I am Doc, your friendly neighborhood **Doctigo Doc** 🩺. What's your name?", True, None)
             SafeChatInput(onSend=handleName, formKey="ask_name")
 
         # ASK SYMPTOMS
