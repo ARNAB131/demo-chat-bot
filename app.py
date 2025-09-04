@@ -24,7 +24,6 @@ def _rerun():
     elif hasattr(st, "experimental_rerun"):
         st.experimental_rerun()
     else:
-        # As a last resort, trigger a no-op state change to force a refresh
         st.session_state["_force_refresh"] = st.session_state.get("_force_refresh", 0) + 1
 
 
@@ -77,6 +76,21 @@ def calculateETA(distance_km: Optional[float]) -> Optional[int]:
 
 
 # -----------------------------
+# Session helpers
+# -----------------------------
+def _ensure_chat_input_key(form_key: str):
+    """
+    Pre-initialize the text input state key that ChatInput.py expects.
+    This prevents ChatInput from trying to write to Session State during widget creation,
+    which can raise StreamlitAPIException on newer versions.
+    """
+    text_key = f"chat_input_text_{form_key}"
+    if text_key not in st.session_state:
+        # use setdefault semantics to avoid assignment conflicts
+        st.session_state[text_key] = ""
+
+
+# -----------------------------
 # Main Page
 # -----------------------------
 def BookingPage():
@@ -105,7 +119,7 @@ def BookingPage():
         st.session_state.finalAppointment = None
 
     st.title("🩺 Doctigo AI")
-    st.caption("Doctigo AI-powered medical booking assistant")
+    st.caption("Your AI-powered medical booking assistant")
 
     step = st.session_state.currentStep
 
@@ -135,6 +149,7 @@ def BookingPage():
         # ASK NAME
         if step == conversationSteps["ASK_NAME"]:
             ChatMessage("Hello! I am Doc, your friendly neighborhood Spider Doc 🕷️🩺. What's your name?", True, None)
+            _ensure_chat_input_key("ask_name")
             ChatInput(onSend=handleName, formKey="ask_name")
 
         elif step == conversationSteps["ASK_SYMPTOMS"]:
@@ -181,6 +196,7 @@ def BookingPage():
             idx = st.session_state.currentDetailStep
             detail = patientDetailSteps[idx]
             ChatMessage(f"Please enter patient's {detail['label']}:", True, None)
+            _ensure_chat_input_key(f"detail_{detail['key']}")
             ChatInput(onSend=handleDetail, formKey=f"detail_{detail['key']}")
 
         elif step == conversationSteps["FINAL_CARD"]:
