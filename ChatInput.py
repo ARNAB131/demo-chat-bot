@@ -1,16 +1,12 @@
 # ChatInput.py
-# Python translation of chatInput.jsx (names unchanged)
-# Props preserved: onSend(message: str), placeholder: str = "Type your message...", disabled: bool = False
-
-from typing import Callable, Optional
+from typing import Callable
 import streamlit as st
 
-def ChatInput(onSend: Callable[[str], None], placeholder: str = "Type your message...", disabled: bool = False):
+def ChatInput(onSend: Callable[[str], None], placeholder: str = "Type your message...", disabled: bool = False, formKey: str = "chat"):
     """
     Renders a chat composer with a text input, mic icon (placeholder), and send button.
     Calls onSend(message) when user submits a non-empty message.
     """
-    # Styles to resemble the original
     st.markdown("""
     <style>
       .ci-wrap{display:flex;gap:8px;padding:16px;background:#fff;border-top:1px solid #e5e7eb;}
@@ -32,26 +28,37 @@ def ChatInput(onSend: Callable[[str], None], placeholder: str = "Type your messa
     </style>
     """, unsafe_allow_html=True)
 
-    # Use a form to get Enter-to-send behavior without rerender issues
-    with st.form(key="chat_input_form", clear_on_submit=True):
-        # We keep an internal key so multiple ChatInput calls don't collide
-        msg: str = st.text_input("", value="", placeholder=placeholder, disabled=disabled, key="chat_input_text")
-        cols = st.columns([1, 0.12, 0.22])
+    text_key = f"chat_input_text_{formKey}"
+    # initialize once
+    if text_key not in st.session_state:
+        st.session_state[text_key] = ""
 
+    with st.form(key=f"chat_input_form_{formKey}", clear_on_submit=False):
+        cols = st.columns([1, 0.12, 0.22])
+        with cols[0]:
+            msg = st.text_input(
+                label="",
+                value=st.session_state[text_key],
+                key=text_key,
+                placeholder=placeholder,
+                disabled=disabled,
+                label_visibility="collapsed",
+            )
         with cols[1]:
             mic_clicked = st.form_submit_button("🎙", disabled=disabled, help="Voice input feature coming soon!")
         with cols[2]:
-            send_clicked = st.form_submit_button("Send ➤", disabled=disabled or (not msg.strip()))
+            send_clicked = st.form_submit_button("Send ➤", disabled=disabled or (not (msg or "").strip()))
 
-        # Mic click placeholder behavior (match the alert from JS)
-        if mic_clicked and not disabled:
-            st.toast("Voice input feature coming soon!", icon="🎙")
+    if mic_clicked and not disabled:
+        st.toast("Voice input feature coming soon!", icon="🎙")
 
-        if send_clicked and not disabled:
-            message = msg.strip()
-            if message:
-                try:
-                    onSend(message)
-                except Exception as e:
-                    # Fail-safe: surface any callback error to the UI
-                    st.error(f"onSend error: {e}")
+    if send_clicked and not disabled:
+        message = (st.session_state[text_key] or "").strip()
+        if message:
+            try:
+                onSend(message)
+            finally:
+                # clear AFTER we’ve used the value
+                st.session_state[text_key] = ""
+                # force UI to reflect new state immediately
+                st.experimental_rerun()
