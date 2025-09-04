@@ -3,7 +3,29 @@ from datetime import datetime
 from typing import Dict, Any, List, Optional
 import math
 
+# -----------------------------------------------------------------------------
+# Streamlit compatibility shims
+# -----------------------------------------------------------------------------
+# Some of your components (e.g., SymptomSelector.py) call st.experimental_rerun().
+# Newer Streamlit versions removed it in favor of st.rerun().
+# This shim guarantees both names exist.
+if not hasattr(st, "experimental_rerun") and hasattr(st, "rerun"):
+    st.experimental_rerun = st.rerun  # alias for backward compatibility
+
+# A safe rerun helper we can call anywhere
+def _rerun():
+    if hasattr(st, "rerun"):
+        st.rerun()
+    elif hasattr(st, "experimental_rerun"):
+        st.experimental_rerun()
+    else:
+        # last resort: nudge state so Streamlit re-executes
+        st.session_state["_force_refresh"] = st.session_state.get("_force_refresh", 0) + 1
+
+
+# -----------------------------------------------------------------------------
 # Import our translated components
+# -----------------------------------------------------------------------------
 from ChatMessage import ChatMessage
 from ChatInput import ChatInput
 from SymptomSelector import SymptomSelector
@@ -13,18 +35,6 @@ from AppointmentCard import AppointmentCard
 
 # Schemas (optional runtime validation if pydantic is available)
 from models import Appointment, Doctor, Hospital
-
-
-# -----------------------------
-# Compatibility: rerun helper (Streamlit 1.30+ uses st.rerun, older uses st.experimental_rerun)
-# -----------------------------
-def _rerun():
-    if hasattr(st, "rerun"):
-        st.rerun()
-    elif hasattr(st, "experimental_rerun"):
-        st.experimental_rerun()
-    else:
-        st.session_state["_force_refresh"] = st.session_state.get("_force_refresh", 0) + 1
 
 
 # -----------------------------
@@ -81,12 +91,10 @@ def calculateETA(distance_km: Optional[float]) -> Optional[int]:
 def _ensure_chat_input_key(form_key: str):
     """
     Pre-initialize the text input state key that ChatInput.py expects.
-    This prevents ChatInput from trying to write to Session State during widget creation,
-    which can raise StreamlitAPIException on newer versions.
+    Prevents SessionState assignment errors during widget creation.
     """
     text_key = f"chat_input_text_{form_key}"
     if text_key not in st.session_state:
-        # use setdefault semantics to avoid assignment conflicts
         st.session_state[text_key] = ""
 
 
@@ -155,9 +163,10 @@ def BookingPage():
         elif step == conversationSteps["ASK_SYMPTOMS"]:
             bookingType = st.session_state.bookingType
             if bookingType == "emergency":
-                ChatMessage("Woooo it's an EMERGENCY! Just enter symptoms or type 'next'.", True, None)
+                ChatMessage("Woooo it's an **EMERGENCY**! Just enter symptoms or type 'next'.", True, None)
             else:
                 ChatMessage("Enter your symptoms or type 'next'.", True, None)
+            # Your SymptomSelector handles its own reruns; no changes needed here
             SymptomSelector(onSubmit=handleSymptoms, onSkip=lambda: handleSymptoms([]))
 
         elif step == conversationSteps["SHOW_DOCTORS"]:
