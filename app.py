@@ -163,6 +163,9 @@ DEFAULT_INVENTORY = {
     },
 }
 
+# Unit ID prefixes
+UNIT_PREFIX = {"General Bed": "G", "General Cabin": "C", "VIP Cabin": "V"}
+
 
 # =============================================================================
 # Conversation Steps
@@ -171,9 +174,9 @@ conversationSteps = {
     "INITIAL": "initial",
     "ASK_NAME": "ask_name",
     "ASK_SYMPTOMS": "ask_symptoms",
-    "CHOOSE_PATH": "choose_path",         # <-- NEW: choose Doctors or Hospitals
+    "CHOOSE_PATH": "choose_path",         # choose Doctors or Hospitals
     "SHOW_DOCTORS": "show_doctors",
-    "SHOW_HOSPITALS": "show_hospitals",   # <-- NEW: list hospitals, then bed flow
+    "SHOW_HOSPITALS": "show_hospitals",
     "ASK_BED": "ask_bed",
     "ASK_VITALS": "ask_vitals",
     "COLLECT_DETAILS": "collect_details",
@@ -277,29 +280,80 @@ SYMPTOM_TO_SPEC = {
 def recommended_doctors_from_symptoms(symptoms: List[str]) -> List[Dict[str, Any]]:
     if not symptoms:
         return DOCTORS[:]  # all
-    # collect target specializations for given symptoms
     target_specs = set()
     for s in symptoms:
         s_norm = str(s).strip().lower()
         if s_norm in SYMPTOM_TO_SPEC:
             target_specs.add(SYMPTOM_TO_SPEC[s_norm])
-    # fallback: if none matched, suggest all
     if not target_specs:
         return DOCTORS[:]
-    # filter doctors by specialization match
     out = [d for d in DOCTORS if d["specialization"] in target_specs]
     return out if out else DOCTORS[:]
+
+
+def _match_hospital_from_chamber(chamber: str) -> Optional[Dict[str, Any]]:
+    """Try to infer a hospital from a doctor's chamber string."""
+    if not chamber:
+        return None
+    low = chamber.lower()
+    for h in HOSPITALS:
+        name_low = h["name"].lower()
+        if "munni medical hall" in low and "munni medical hall" in name_low:
+            return h
+        if "jeevan jyoti" in low and "jeevan jyoti" in name_low:
+            return h
+        if "silchar medical" in low and "silchar medical" in name_low:
+            return h
+        # loose contains as fallback
+        if name_low.split(",")[0] in low or name_low in low:
+            return h
+    # fuzzy heuristics
+    if "munni" in low:
+        return next((h for h in HOSPITALS if "munni" in h["name"].lower()), None)
+    if "jeevan" in low:
+        return next((h for h in HOSPITALS if "jeevan" in h["name"].lower()), None)
+    if "silchar" in low:
+        return next((h for h in HOSPITALS if "silchar" in h["name"].lower()), None)
+    return None
+
+
+def _allocate_bed_unit(hospital_name: str, bed_type: str) -> Optional[Dict[str, Any]]:
+    """
+    Allocate next available unit for bed_type at hospital_name.
+    Returns dict with {unit_id, serial, price, features} or None if none available.
+    """
+    if not hospital_name or bed_type not in UNIT_PREFIX:
+        return None
+    inv_all = st.session_state.inventory
+    inv_h = inv_all.get(hospital_name)
+    if not inv_h or bed_type not in inv_h:
+        return None
+    slot = inv_h[bed_type]
+    total = int(slot["total"])
+    booked = int(slot["booked"])
+    available = total - booked
+    if available <= 0:
+        return None
+    serial = booked + 1
+    prefix = UNIT_PREFIX[bed_type]
+    unit_id = f"{prefix}-{serial}"
+    # mark booked
+    inv_h[bed_type]["booked"] = booked + 1
+    inv_all[hospital_name] = inv_h
+    st.session_state.inventory = inv_all
+    return {
+        "unit_id": unit_id,
+        "serial": serial,
+        "price": slot.get("price", 0),
+        "features": slot.get("features", []),
+        "type": bed_type,
+    }
 
 
 # =============================================================================
 # Solid chat input (Enter + Button both work)
 # =============================================================================
 def SafeChatInput(onSend, placeholder="Type your message...", disabled=False, formKey="chat"):
-    """
-    - Uses a plain text_input with on_change callback.
-    - The same callback is also used by the Send button.
-    - Unique keys per step via formKey.
-    """
     text_key = f"chat_input_text_{formKey}"
     btn_key = f"chat_input_btn_{formKey}"
     st.session_state.setdefault(text_key, "")
@@ -451,7 +505,6 @@ def BookingPage():
                 ChatMessage("Here are available doctors:", True, None)
 
             for doc in recs:
-                # DoctorCard expects keys: doctor, availableSlots, estimatedTime, distance, onBook
                 DoctorCard(
                     doctor={
                         "name": doc["name"],
@@ -464,7 +517,6 @@ def BookingPage():
                     distance=10,
                     onBook=handleDoctorSelect,
                 )
-
             st.info("Tip: click **Book Appointment** on the desired doctor card.")
 
         # SHOW HOSPITALS (then go to bed flow for chosen hospital)
@@ -544,7 +596,6 @@ def handleName(name: str):
 
 
 def handleSymptoms(symptoms: List[str]):
-    # Normalize symptoms to lower-case to match map easily
     st.session_state.symptoms = [s.strip() for s in symptoms]
     shown = ", ".join(st.session_state.symptoms) if symptoms else "None"
     st.session_state.messages.append({"text": f"Symptoms: {shown}", "isBot": False})
@@ -555,29 +606,44 @@ def handleSymptoms(symptoms: List[str]):
 
 def handleDoctorSelect(doctor: Dict[str, Any]):
     st.session_state.selectedDoctor = doctor
-    st.session_state.selectedHospital = None  # doctor path takes precedence for hospital via doctor.chamber
+    # If no explicit hospital chosen yet, try infer from chamber for later bed allocation
+    if not st.session_state.selectedHospital:
+        guessed = _match_hospital_from_chamber(doctor.get("chamber", ""))
+        if guessed:
+            st.session_state.selectedHospital = guessed
     st.session_state.messages.append({"text": f"Selected {doctor['name']}", "isBot": False})
     st.session_state.currentStep = conversationSteps["ASK_BED"]
     _rerun()
 
 
 def handleBedSelect(selection: Optional[Dict[str, Any]]):
-    # selection is a dict with keys: type, price, features
-    st.session_state.bedSelection = selection
+    """
+    selection is a dict with keys: type, price, features (from BedSelector)
+    We augment with unit assignment (unit_id, serial) once hospital is known.
+    """
     if selection:
-        st.session_state.messages.append({"text": f"Selected {selection['type']}", "isBot": False})
-        # If user has selected a hospital earlier, decrement availability
-        hosp = st.session_state.get("selectedHospital")
-        if hosp:
-            inv_h = st.session_state.inventory.get(hosp["name"], DEFAULT_INVENTORY)
-            bedtype = selection["type"]
-            if bedtype in inv_h:
-                # only decrement if available > 0
-                available = inv_h[bedtype]["total"] - inv_h[bedtype]["booked"]
-                if available > 0:
-                    inv_h[bedtype]["booked"] += 1
-                    st.session_state.inventory[hosp["name"]] = inv_h
+        # Determine hospital: either selected hospital, or infer from doctor chamber
+        hospital = st.session_state.get("selectedHospital")
+        if not hospital and st.session_state.selectedDoctor:
+            hospital = _match_hospital_from_chamber(st.session_state.selectedDoctor.get("chamber", ""))
+
+        bed_details = dict(selection)  # copy
+        unit_info = None
+        if hospital:
+            unit_info = _allocate_bed_unit(hospital["name"], selection["type"])
+        if unit_info:
+            bed_details["unit_id"] = unit_info["unit_id"]
+            bed_details["serial"] = unit_info["serial"]
+            st.session_state.messages.append(
+                {"text": f"Selected {selection['type']}  •  Assigned Unit: {unit_info['unit_id']} (Serial #{unit_info['serial']})", "isBot": False}
+            )
+        else:
+            # Could not allocate (no hospital or sold out) — keep type only
+            st.session_state.messages.append({"text": f"Selected {selection['type']}", "isBot": False})
+
+        st.session_state.bedSelection = bed_details
     else:
+        st.session_state.bedSelection = None
         st.session_state.messages.append({"text": "No bed needed.", "isBot": False})
 
     st.session_state.currentStep = conversationSteps["ASK_VITALS"]
@@ -620,7 +686,12 @@ def handleDetail(detail_value: str):
     # Determine hospital name:
     hospital_name = None
     if st.session_state.selectedDoctor:
-        hospital_name = st.session_state.selectedDoctor.get("chamber")
+        # Prefer explicit hospital if chosen; else use doctor's chamber as hospital name
+        hospital_name = (
+            st.session_state.selectedHospital["name"]
+            if st.session_state.selectedHospital
+            else st.session_state.selectedDoctor.get("chamber")
+        )
     elif st.session_state.selectedHospital:
         hospital_name = st.session_state.selectedHospital["name"]
     else:
@@ -635,6 +706,17 @@ def handleDetail(detail_value: str):
     else:
         appt_time = "To be scheduled"
 
+    # Prepare bed detail payload (ensuring unit_id + serial are present if assigned)
+    bed_details_payload = None
+    if st.session_state.bedSelection:
+        bed_details_payload = {
+            "type": st.session_state.bedSelection.get("type"),
+            "price": st.session_state.bedSelection.get("price"),
+            "features": st.session_state.bedSelection.get("features", []),
+            "unit_id": st.session_state.bedSelection.get("unit_id"),
+            "serial": st.session_state.bedSelection.get("serial"),
+        }
+
     appointment = {
         "patient_name": st.session_state.patientName,
         "booking_type": st.session_state.bookingType,
@@ -645,8 +727,10 @@ def handleDetail(detail_value: str):
         "appointment_time": appt_time,
         **st.session_state.patientDetails,
         "needs_bed": bool(st.session_state.bedSelection),
-        "bed_type": st.session_state.bedSelection["type"] if st.session_state.bedSelection else None,
-        "bed_details": st.session_state.bedSelection if st.session_state.bedSelection else None,
+        "bed_type": st.session_state.bedSelection.get("type") if st.session_state.bedSelection else None,
+        "bed_unit_id": st.session_state.bedSelection.get("unit_id") if st.session_state.bedSelection else None,
+        "bed_serial": st.session_state.bedSelection.get("serial") if st.session_state.bedSelection else None,
+        "bed_details": bed_details_payload,  # JSON-like dict with unit_id & serial included
         "recent_vitals": st.session_state.recentVitals,
         "status": "confirmed",
     }
