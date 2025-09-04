@@ -16,6 +16,19 @@ from models import Appointment, Doctor, Hospital
 
 
 # -----------------------------
+# Compatibility: rerun helper (Streamlit 1.30+ uses st.rerun, older uses st.experimental_rerun)
+# -----------------------------
+def _rerun():
+    if hasattr(st, "rerun"):
+        st.rerun()
+    elif hasattr(st, "experimental_rerun"):
+        st.experimental_rerun()
+    else:
+        # As a last resort, trigger a no-op state change to force a refresh
+        st.session_state["_force_refresh"] = st.session_state.get("_force_refresh", 0) + 1
+
+
+# -----------------------------
 # Conversation Steps
 # -----------------------------
 conversationSteps = {
@@ -105,13 +118,13 @@ def BookingPage():
                 st.session_state.bookingType = "normal"
                 st.session_state.messages.append({"text": "I want normal booking", "isBot": False})
                 st.session_state.currentStep = conversationSteps["ASK_NAME"]
-                st.experimental_rerun()
+                _rerun()
         with c2:
             if st.button("🚨 Emergency Booking"):
                 st.session_state.bookingType = "emergency"
                 st.session_state.messages.append({"text": "I want emergency booking", "isBot": False})
                 st.session_state.currentStep = conversationSteps["ASK_NAME"]
-                st.experimental_rerun()
+                _rerun()
 
     # ----------------- Chat area -----------------
     else:
@@ -136,8 +149,20 @@ def BookingPage():
             ChatMessage("Based on your information, here are available doctors:", True, None)
             # NOTE: replace this with actual Doctor.list() + Hospital.list() once wired
             dummy_doctors = [
-                {"name": "Amit Kumar", "specialization": "General Medicine", "chamber": "City Hospital", "experience": "15 yrs", "available_slots": ["11:00am-11:30am", "12:00pm-12:30pm"]},
-                {"name": "Suvajoyti Chakraborty", "specialization": "Surgeon", "chamber": "Munni Medical Hall", "experience": "20 yrs", "available_slots": ["1:00pm-1:30pm", "2:00pm-2:30pm"]},
+                {
+                    "name": "Amit Kumar",
+                    "specialization": "General Medicine",
+                    "chamber": "City Hospital",
+                    "experience": "15 yrs",
+                    "available_slots": ["11:00am-11:30am", "12:00pm-12:30pm"],
+                },
+                {
+                    "name": "Suvajoyti Chakraborty",
+                    "specialization": "Surgeon",
+                    "chamber": "Munni Medical Hall",
+                    "experience": "20 yrs",
+                    "available_slots": ["1:00pm-1:30pm", "2:00pm-2:30pm"],
+                },
             ]
             for doc in dummy_doctors:
                 DoctorCard(
@@ -169,23 +194,27 @@ def BookingPage():
 def handleName(name: str):
     st.session_state.patientName = name
     st.session_state.messages.append({"text": name, "isBot": False})
-    st.session_state.messages.append({"text": f"Hello {name}! So you opted for {st.session_state.bookingType} booking.", "isBot": True})
+    st.session_state.messages.append(
+        {"text": f"Hello {name}! So you opted for {st.session_state.bookingType} booking.", "isBot": True}
+    )
     st.session_state.currentStep = conversationSteps["ASK_SYMPTOMS"]
-    st.experimental_rerun()
+    _rerun()
 
 
 def handleSymptoms(symptoms: List[str]):
     st.session_state.symptoms = symptoms
-    st.session_state.messages.append({"text": f"Symptoms: {', '.join(symptoms) if symptoms else 'None'}", "isBot": False})
+    st.session_state.messages.append(
+        {"text": f"Symptoms: {', '.join(symptoms) if symptoms else 'None'}", "isBot": False}
+    )
     st.session_state.currentStep = conversationSteps["SHOW_DOCTORS"]
-    st.experimental_rerun()
+    _rerun()
 
 
 def handleDoctorSelect(doctor: Dict[str, Any]):
     st.session_state.selectedDoctor = doctor
     st.session_state.messages.append({"text": f"Selected Dr. {doctor['name']}", "isBot": False})
     st.session_state.currentStep = conversationSteps["ASK_BED"]
-    st.experimental_rerun()
+    _rerun()
 
 
 def handleBedSelect(selection: Optional[Dict[str, Any]]):
@@ -195,7 +224,7 @@ def handleBedSelect(selection: Optional[Dict[str, Any]]):
     else:
         st.session_state.messages.append({"text": "No bed needed.", "isBot": False})
     st.session_state.currentStep = conversationSteps["COLLECT_DETAILS"]
-    st.experimental_rerun()
+    _rerun()
 
 
 def handleDetail(detail_value: str):
@@ -206,7 +235,7 @@ def handleDetail(detail_value: str):
 
     if idx < len(patientDetailSteps) - 1:
         st.session_state.currentDetailStep += 1
-        st.experimental_rerun()
+        _rerun()
         return
 
     # Finalize appointment
@@ -221,13 +250,13 @@ def handleDetail(detail_value: str):
         **st.session_state.patientDetails,
         "needs_bed": bool(st.session_state.bedSelection),
         "bed_type": st.session_state.bedSelection["type"] if st.session_state.bedSelection else None,
-        # pass raw details (dict) — AppointmentCard handles str or dict
+        # AppointmentCard handles dict or JSON string
         "bed_details": st.session_state.bedSelection if st.session_state.bedSelection else None,
         "status": "confirmed",
     }
     st.session_state.finalAppointment = appointment
     st.session_state.currentStep = conversationSteps["FINAL_CARD"]
-    st.experimental_rerun()
+    _rerun()
 
 
 # -----------------------------
