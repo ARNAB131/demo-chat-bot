@@ -11,7 +11,7 @@ from DoctorCard import DoctorCard
 from BedSelector import BedSelector
 from AppointmentCard import AppointmentCard
 
-# Schemas
+# Schemas (optional runtime validation if pydantic is available)
 from models import Appointment, Doctor, Hospital
 
 
@@ -92,7 +92,7 @@ def BookingPage():
         st.session_state.finalAppointment = None
 
     st.title("🩺 Doctigo AI")
-    st.caption("Your AI-powered medical booking assistant")
+    st.caption("Doctigo AI-powered medical booking assistant")
 
     step = st.session_state.currentStep
 
@@ -105,11 +105,13 @@ def BookingPage():
                 st.session_state.bookingType = "normal"
                 st.session_state.messages.append({"text": "I want normal booking", "isBot": False})
                 st.session_state.currentStep = conversationSteps["ASK_NAME"]
+                st.experimental_rerun()
         with c2:
             if st.button("🚨 Emergency Booking"):
                 st.session_state.bookingType = "emergency"
                 st.session_state.messages.append({"text": "I want emergency booking", "isBot": False})
                 st.session_state.currentStep = conversationSteps["ASK_NAME"]
+                st.experimental_rerun()
 
     # ----------------- Chat area -----------------
     else:
@@ -120,7 +122,7 @@ def BookingPage():
         # ASK NAME
         if step == conversationSteps["ASK_NAME"]:
             ChatMessage("Hello! I am Doc, your friendly neighborhood Spider Doc 🕷️🩺. What's your name?", True, None)
-            ChatInput(onSend=handleName)
+            ChatInput(onSend=handleName, formKey="ask_name")
 
         elif step == conversationSteps["ASK_SYMPTOMS"]:
             bookingType = st.session_state.bookingType
@@ -132,6 +134,7 @@ def BookingPage():
 
         elif step == conversationSteps["SHOW_DOCTORS"]:
             ChatMessage("Based on your information, here are available doctors:", True, None)
+            # NOTE: replace this with actual Doctor.list() + Hospital.list() once wired
             dummy_doctors = [
                 {"name": "Amit Kumar", "specialization": "General Medicine", "chamber": "City Hospital", "experience": "15 yrs", "available_slots": ["11:00am-11:30am", "12:00pm-12:30pm"]},
                 {"name": "Suvajoyti Chakraborty", "specialization": "Surgeon", "chamber": "Munni Medical Hall", "experience": "20 yrs", "available_slots": ["1:00pm-1:30pm", "2:00pm-2:30pm"]},
@@ -153,7 +156,7 @@ def BookingPage():
             idx = st.session_state.currentDetailStep
             detail = patientDetailSteps[idx]
             ChatMessage(f"Please enter patient's {detail['label']}:", True, None)
-            ChatInput(onSend=handleDetail)
+            ChatInput(onSend=handleDetail, formKey=f"detail_{detail['key']}")
 
         elif step == conversationSteps["FINAL_CARD"]:
             ChatMessage("🎉 Appointment confirmed! Here's your appointment card:", True, None)
@@ -168,18 +171,21 @@ def handleName(name: str):
     st.session_state.messages.append({"text": name, "isBot": False})
     st.session_state.messages.append({"text": f"Hello {name}! So you opted for {st.session_state.bookingType} booking.", "isBot": True})
     st.session_state.currentStep = conversationSteps["ASK_SYMPTOMS"]
+    st.experimental_rerun()
 
 
 def handleSymptoms(symptoms: List[str]):
     st.session_state.symptoms = symptoms
     st.session_state.messages.append({"text": f"Symptoms: {', '.join(symptoms) if symptoms else 'None'}", "isBot": False})
     st.session_state.currentStep = conversationSteps["SHOW_DOCTORS"]
+    st.experimental_rerun()
 
 
 def handleDoctorSelect(doctor: Dict[str, Any]):
     st.session_state.selectedDoctor = doctor
     st.session_state.messages.append({"text": f"Selected Dr. {doctor['name']}", "isBot": False})
     st.session_state.currentStep = conversationSteps["ASK_BED"]
+    st.experimental_rerun()
 
 
 def handleBedSelect(selection: Optional[Dict[str, Any]]):
@@ -189,6 +195,7 @@ def handleBedSelect(selection: Optional[Dict[str, Any]]):
     else:
         st.session_state.messages.append({"text": "No bed needed.", "isBot": False})
     st.session_state.currentStep = conversationSteps["COLLECT_DETAILS"]
+    st.experimental_rerun()
 
 
 def handleDetail(detail_value: str):
@@ -199,24 +206,28 @@ def handleDetail(detail_value: str):
 
     if idx < len(patientDetailSteps) - 1:
         st.session_state.currentDetailStep += 1
-    else:
-        # Finalize appointment
-        appointment = {
-            "patient_name": st.session_state.patientName,
-            "booking_type": st.session_state.bookingType,
-            "symptoms": st.session_state.symptoms,
-            "doctor_name": st.session_state.selectedDoctor["name"],
-            "hospital_name": st.session_state.selectedDoctor["chamber"],
-            "appointment_date": datetime.now().isoformat(),
-            "appointment_time": st.session_state.selectedDoctor["available_slots"][0],
-            **st.session_state.patientDetails,
-            "needs_bed": bool(st.session_state.bedSelection),
-            "bed_type": st.session_state.bedSelection["type"] if st.session_state.bedSelection else None,
-            "bed_details": st.session_state.bedSelection if st.session_state.bedSelection else None,
-            "status": "confirmed",
-        }
-        st.session_state.finalAppointment = appointment
-        st.session_state.currentStep = conversationSteps["FINAL_CARD"]
+        st.experimental_rerun()
+        return
+
+    # Finalize appointment
+    appointment = {
+        "patient_name": st.session_state.patientName,
+        "booking_type": st.session_state.bookingType,
+        "symptoms": st.session_state.symptoms,
+        "doctor_name": st.session_state.selectedDoctor["name"],
+        "hospital_name": st.session_state.selectedDoctor["chamber"],
+        "appointment_date": datetime.now().isoformat(),
+        "appointment_time": st.session_state.selectedDoctor["available_slots"][0],
+        **st.session_state.patientDetails,
+        "needs_bed": bool(st.session_state.bedSelection),
+        "bed_type": st.session_state.bedSelection["type"] if st.session_state.bedSelection else None,
+        # pass raw details (dict) — AppointmentCard handles str or dict
+        "bed_details": st.session_state.bedSelection if st.session_state.bedSelection else None,
+        "status": "confirmed",
+    }
+    st.session_state.finalAppointment = appointment
+    st.session_state.currentStep = conversationSteps["FINAL_CARD"]
+    st.experimental_rerun()
 
 
 # -----------------------------
