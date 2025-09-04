@@ -8,15 +8,15 @@ from vitals_bridge import set_latest_vitals
 
 st.set_page_config(page_title="Vitals Hub", page_icon="💓", layout="centered")
 st.title("💓 Vitals Hub")
-st.caption("Prepare or import recent vitals so the chat bot can attach them to your appointment.")
+st.caption("Capture real time vital or import recent vitals so the chat bot can attach them to your appointment.")
 
 st.subheader("1) Create or Upload Vitals")
 
 col1, col2 = st.columns(2)
 with col1:
-    gen = st.button("Generate sample vitals (100 rows)")
+    gen = st.button("Push the Button For Real Time Vital")
 with col2:
-    uploaded = st.file_uploader("Upload CSV with columns: timestamp, systolic_bp, diastolic_bp, body_temperature", type=["csv"])
+    uploaded = st.file_uploader("Upload CSV of your vitals if you have it already", type=["csv"])
 
 df = st.session_state.get("forecast_data", pd.DataFrame())
 
@@ -48,7 +48,7 @@ if not df.empty:
     last = df.iloc[-1].to_dict()
     st.write("**Most recent vitals:**", last)
 
-    if st.button("✅ Publish these as 'recent vitals' for the chat bot"):
+    if st.button("✅ Publish your real time vital to the chat bot"):
         vitals_dict = {
             "timestamp": str(last.get("timestamp", datetime.now().isoformat())),
             "systolic_bp": float(last.get("systolic_bp", 120)),
@@ -58,4 +58,4 @@ if not df.empty:
         set_latest_vitals(vitals_dict)
         st.success("Recent vitals published! Go back to the chat to attach them (answer Yes).")
 else:
-    st.info("Generate or upload vitals above to get started.")
+    st.info("Capture or upload vitals above to get started.")
