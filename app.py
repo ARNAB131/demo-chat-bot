@@ -6,28 +6,25 @@ import math
 # -----------------------------------------------------------------------------
 # Streamlit compatibility shims
 # -----------------------------------------------------------------------------
-# Some of your components (e.g., SymptomSelector.py) call st.experimental_rerun().
-# Newer Streamlit versions removed it in favor of st.rerun().
-# This shim guarantees both names exist.
+# Some components may call st.experimental_rerun(); alias it to st.rerun when needed.
 if not hasattr(st, "experimental_rerun") and hasattr(st, "rerun"):
     st.experimental_rerun = st.rerun  # alias for backward compatibility
 
-# A safe rerun helper we can call anywhere
+
 def _rerun():
+    """Safe rerun helper across Streamlit versions."""
     if hasattr(st, "rerun"):
         st.rerun()
     elif hasattr(st, "experimental_rerun"):
         st.experimental_rerun()
     else:
-        # last resort: nudge state so Streamlit re-executes
         st.session_state["_force_refresh"] = st.session_state.get("_force_refresh", 0) + 1
 
 
 # -----------------------------------------------------------------------------
-# Import our translated components
+# Import UI components (we'll not use ChatInput.py to avoid the crash)
 # -----------------------------------------------------------------------------
 from ChatMessage import ChatMessage
-from ChatInput import ChatInput
 from SymptomSelector import SymptomSelector
 from DoctorCard import DoctorCard
 from BedSelector import BedSelector
@@ -86,16 +83,56 @@ def calculateETA(distance_km: Optional[float]) -> Optional[int]:
 
 
 # -----------------------------
-# Session helpers
+# Safe inline ChatInput replacement
 # -----------------------------
-def _ensure_chat_input_key(form_key: str):
+def SafeChatInput(onSend, placeholder="Type your message...", disabled=False, formKey="chat"):
     """
-    Pre-initialize the text input state key that ChatInput.py expects.
-    Prevents SessionState assignment errors during widget creation.
+    A crash-free chat input:
+      - Unique keys per step via formKey
+      - No direct widget-state mutation after creation
+      - Clears AFTER sending and triggers rerun
     """
-    text_key = f"chat_input_text_{form_key}"
-    if text_key not in st.session_state:
-        st.session_state[text_key] = ""
+    text_key = f"chat_input_text_{formKey}"
+    st.session_state.setdefault(text_key, "")
+
+    # Simple styles (optional)
+    st.markdown("""
+    <style>
+      .ci-wrap{display:flex;gap:8px;padding:16px;background:#fff;border-top:1px solid #e5e7eb;}
+      .ci-input{position:relative;flex:1;}
+      .ci-send{
+        padding:8px 16px;border-radius:8px;border:0;background:#3b82f6;color:#fff;cursor:pointer;
+      }
+      .ci-send:disabled{opacity:.5;cursor:not-allowed}
+      .ci-input input{
+        width:100%;padding:10px 12px;border-radius:8px;border:1px solid #e5e7eb;background:#f9fafb;
+        outline:none;
+      }
+      .ci-input input:focus{border-color:#3b82f6;box-shadow:0 0 0 3px rgba(59,130,246,.2)}
+    </style>
+    """, unsafe_allow_html=True)
+
+    with st.form(key=f"chat_input_form_{formKey}", clear_on_submit=False):
+        cols = st.columns([1, 0.22])
+        with cols[0]:
+            msg = st.text_input(
+                label="",
+                key=text_key,
+                placeholder=placeholder,
+                disabled=disabled,
+                label_visibility="collapsed",
+            )
+        with cols[1]:
+            send_clicked = st.form_submit_button("Send ➤", disabled=disabled or not (msg or "").strip())
+
+    if send_clicked and not disabled:
+        message = (st.session_state[text_key] or "").strip()
+        if message:
+            try:
+                onSend(message)
+            finally:
+                st.session_state[text_key] = ""
+                _rerun()
 
 
 # -----------------------------
@@ -127,7 +164,7 @@ def BookingPage():
         st.session_state.finalAppointment = None
 
     st.title("🩺 Doctigo AI")
-    st.caption("Your AI-powered medical booking assistant")
+    st.caption("Doctigo AI-powered medical booking assistant")
 
     step = st.session_state.currentStep
 
@@ -157,8 +194,7 @@ def BookingPage():
         # ASK NAME
         if step == conversationSteps["ASK_NAME"]:
             ChatMessage("Hello! I am Doc, your friendly neighborhood Spider Doc 🕷️🩺. What's your name?", True, None)
-            _ensure_chat_input_key("ask_name")
-            ChatInput(onSend=handleName, formKey="ask_name")
+            SafeChatInput(onSend=handleName, formKey="ask_name")
 
         elif step == conversationSteps["ASK_SYMPTOMS"]:
             bookingType = st.session_state.bookingType
@@ -166,7 +202,6 @@ def BookingPage():
                 ChatMessage("Woooo it's an **EMERGENCY**! Just enter symptoms or type 'next'.", True, None)
             else:
                 ChatMessage("Enter your symptoms or type 'next'.", True, None)
-            # Your SymptomSelector handles its own reruns; no changes needed here
             SymptomSelector(onSubmit=handleSymptoms, onSkip=lambda: handleSymptoms([]))
 
         elif step == conversationSteps["SHOW_DOCTORS"]:
@@ -205,8 +240,7 @@ def BookingPage():
             idx = st.session_state.currentDetailStep
             detail = patientDetailSteps[idx]
             ChatMessage(f"Please enter patient's {detail['label']}:", True, None)
-            _ensure_chat_input_key(f"detail_{detail['key']}")
-            ChatInput(onSend=handleDetail, formKey=f"detail_{detail['key']}")
+            SafeChatInput(onSend=handleDetail, formKey=f"detail_{detail['key']}")
 
         elif step == conversationSteps["FINAL_CARD"]:
             ChatMessage("🎉 Appointment confirmed! Here's your appointment card:", True, None)
