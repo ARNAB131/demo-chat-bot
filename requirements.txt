@@ -1,20 +1,24 @@
-# --- Core UI + Chatbot ---
-streamlit==1.36.0        # demo-chat-bot requires >=1.36, override doctigo-vitals (1.26.0) with newer
-pydantic>=2.0
-email-validator>=2.0
+# ===== Streamlit & app core =====
+streamlit==1.36.0
+pydantic>=2.5,<3
+email-validator>=2.1,<3
 
-# --- Data science + Vitals ---
+# ===== Data stack =====
 pandas==1.5.3
 numpy==1.26.4
+scipy==1.10.1            # REQUIRED by scikit-learn
 scikit-learn==1.3.2
 xgboost==1.7.5
 
-# --- Visualization + Reports ---
+# ===== Visualization / media =====
 plotly==5.18.0
 fpdf==1.7.2
-PyMuPDF==1.20.2
-pillow==9.4.0
+# Pillow 9.4.0 wheel can fail in some builds; use a newer stable wheel:
+pillow==10.3.0
 
-# --- Backend / Security / Firebase ---
+# PyMuPDF: use a modern, manylinux wheel that supports Python 3.11
+PyMuPDF==1.24.9          # import as "import fitz" in code
+
+# ===== Firebase / security =====
 firebase_admin==6.2.0
 cryptography==41.0.7
